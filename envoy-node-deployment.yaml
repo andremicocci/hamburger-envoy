@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: envoy-node-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: envoy-node-app
+  template:
+    metadata:
+      labels:
+        app: envoy-node-app
+    spec:
+      containers:
+      - name: node-app
+        image: node:20-alpine
+        command: 
+            - "node"
+            - "-e"
+            - |
+              const http = require('http');
+
+              const server = http.createServer((req, res) => {
+                // 50% de chance de cortar a conexão abruptamente (gera ECONNRESET / socket hang up no Gateway)
+                if (Math.random() < 0.50) {
+                  // Destrói o socket sem enviar headers, simulando o erro upstream
+                  req.socket.destroy();
+                  return;
+                }
+
+                // 50% das requisições respondem normalmente
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end('OK');
+              });
+
+              server.keepAliveTimeout = 5000;
+              server.listen(3000, () => {
+                console.log('Unstable Node.js app running on port 3000');
+              });              
+        ports:
+        - containerPort: 3000
+      - name: envoy
+        image: envoyproxy/envoy:v1.34.4
+        args: ["-c", "/etc/envoy/envoy.yaml"]
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/envoy
+      volumes:
+      - name: config-volume
+        configMap:
+          name: envoy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy-service
+spec:
+  selector:
+    app: envoy-node-app
+  ports:
+  - port: 80
+    targetPort: 8080
